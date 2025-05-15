@@ -1,0 +1,211 @@
+#property indicator_chart_window
+#property indicator_buffers 7
+#property indicator_color1 Blue      // Upper Breakout Line
+#property indicator_color2 Red       // Lower Breakout Line
+#property indicator_color3 Green     // Take Profit for Buy
+#property indicator_color4 Green     // Take Profit for Sell
+#property indicator_color5 Purple    // 50 EMA
+#property indicator_color6 Lime      // Buy Signal Arrow
+#property indicator_color7 Magenta   // Sell Signal Arrow
+
+// Indicator Buffers
+double UpperBreakout[];
+double LowerBreakout[];
+double BuyTP[];
+double SellTP[];
+double EMA50[];
+double BuySignal[];
+double SellSignal[];
+
+// Inputs
+input int LookbackDays = 1;         // How many days back to calculate range
+input double RiskRewardRatio = 2.0;  // Risk:Reward ratio for take profit
+input double RangeMultiplier = 0.20; // Range multiplier (0.20 = 20%)
+input bool ShowArrows = true;        // Show buy/sell signal arrows
+input int ArrowSize = 4;             // Size of signal arrows
+
+// For storing the last signal time to avoid duplicates
+datetime lastSignalTime = 0;
+
+//+------------------------------------------------------------------+
+//| Custom indicator initialization function                         |
+//+------------------------------------------------------------------+
+int init()
+{
+    // Set up buffers
+    SetIndexBuffer(0, UpperBreakout);
+    SetIndexBuffer(1, LowerBreakout);
+    SetIndexBuffer(2, BuyTP);
+    SetIndexBuffer(3, SellTP);
+    SetIndexBuffer(4, EMA50);
+    SetIndexBuffer(5, BuySignal);
+    SetIndexBuffer(6, SellSignal);
+    
+    // Set styles
+    SetIndexStyle(0, DRAW_LINE, STYLE_SOLID, 2);
+    SetIndexStyle(1, DRAW_LINE, STYLE_SOLID, 2);
+    SetIndexStyle(2, DRAW_LINE, STYLE_DASH, 1);
+    SetIndexStyle(3, DRAW_LINE, STYLE_DASH, 1);
+    SetIndexStyle(4, DRAW_LINE, STYLE_SOLID, 1);
+    SetIndexStyle(5, DRAW_ARROW, STYLE_SOLID, ArrowSize);
+    SetIndexStyle(6, DRAW_ARROW, STYLE_SOLID, ArrowSize);
+    
+    // Set arrow codes
+    SetIndexArrow(5, 233); // Up arrow
+    SetIndexArrow(6, 234); // Down arrow
+    
+    // Set labels
+    SetIndexLabel(0, "Upper Breakout");
+    SetIndexLabel(1, "Lower Breakout");
+    SetIndexLabel(2, "Buy Take Profit");
+    SetIndexLabel(3, "Sell Take Profit");
+    SetIndexLabel(4, "50 EMA");
+    SetIndexLabel(5, "Buy Signal");
+    SetIndexLabel(6, "Sell Signal");
+    
+    return(0);
+}
+
+//+------------------------------------------------------------------+
+//| Indicator calculation function                                   |
+//+------------------------------------------------------------------+
+int start()
+{
+    int counted_bars = IndicatorCounted();
+    int limit = Bars - counted_bars;
+    
+    if (limit > Bars - LookbackDays - 1) limit = Bars - LookbackDays - 1;
+    
+    // Calculate 50 EMA
+    for (int j = limit; j >= 0; j--)
+    {
+        EMA50[j] = iMA(NULL, 0, 50, 0, MODE_EMA, PRICE_CLOSE, j);
+    }
+    
+    // Variables to store breakout levels for display
+    double currentUpperBreakout = 0;
+    double currentLowerBreakout = 0;
+    double currentBuyTP = 0;
+    double currentSellTP = 0;
+    
+    for (int i = limit; i >= 0; i--)
+    {
+        // Get current day's open
+        datetime current_day = Time[i];
+        int dayIndex = iBarShift(NULL, PERIOD_D1, current_day, true);
+        double todayOpen = iOpen(NULL, PERIOD_D1, dayIndex);
+        
+        // Get previous day's range with multiplier
+        int prevDayIndex = dayIndex + 1;
+        double prevHigh = iHigh(NULL, PERIOD_D1, prevDayIndex);
+        double prevLow = iLow(NULL, PERIOD_D1, prevDayIndex);
+        double prevRange = (prevHigh - prevLow) * RangeMultiplier;
+        
+        // Calculate breakout levels
+        UpperBreakout[i] = todayOpen + prevRange;
+        LowerBreakout[i] = todayOpen - prevRange;
+        
+        // Calculate take profit levels (2x the distance from entry to stop)
+        double buyStopLoss = LowerBreakout[i]; // If we buy at upper breakout, stop is at lower breakout
+        double sellStopLoss = UpperBreakout[i]; // If we sell at lower breakout, stop is at upper breakout
+        
+        // Calculate take profits based on risk-reward ratio
+        BuyTP[i] = UpperBreakout[i] + (RiskRewardRatio * (UpperBreakout[i] - buyStopLoss));
+        SellTP[i] = LowerBreakout[i] - (RiskRewardRatio * (sellStopLoss - LowerBreakout[i]));
+        
+        // Check for signals on current bar (i=0)
+        if (i == 0)
+        {
+            currentUpperBreakout = UpperBreakout[i];
+            currentLowerBreakout = LowerBreakout[i];
+            currentBuyTP = BuyTP[i];
+            currentSellTP = SellTP[i];
+        }
+        
+        // Initialize arrows to 0 (no arrow)
+        BuySignal[i] = 0;
+        SellSignal[i] = 0;
+        
+        if (ShowArrows)
+        {
+            // Check for buy signal (price crosses above upper breakout and above 50 EMA)
+            if (i < Bars-1 && 
+                Close[i] > UpperBreakout[i] && 
+                Close[i+1] <= UpperBreakout[i+1] && 
+                Close[i] > EMA50[i])
+            {
+                BuySignal[i] = Low[i] - 10 * Point; // Plot arrow below the candle
+                
+                // Check if this is a new signal (not on the same bar as last signal)
+                if (Time[i] != lastSignalTime)
+                {
+                    lastSignalTime = Time[i];
+                    // This is where we would send Telegram notification for buy
+                }
+            }
+            
+            // Check for sell signal (price crosses below lower breakout and below 50 EMA)
+            if (i < Bars-1 && 
+                Close[i] < LowerBreakout[i] && 
+                Close[i+1] >= LowerBreakout[i+1] && 
+                Close[i] < EMA50[i])
+            {
+                SellSignal[i] = High[i] + 10 * Point; // Plot arrow above the candle
+                
+                // Check if this is a new signal (not on the same bar as last signal)
+                if (Time[i] != lastSignalTime)
+                {
+                    lastSignalTime = Time[i];
+                    // This is where we would send Telegram notification for sell
+                }
+            }
+        }
+    }
+    
+    // Display levels in the corner of the chart
+    displayLevels(currentUpperBreakout, currentLowerBreakout, currentBuyTP, currentSellTP);
+    
+    return(0);
+}
+
+//+------------------------------------------------------------------+
+//| Display price levels in the corner of the chart                  |
+//+------------------------------------------------------------------+
+void displayLevels(double upperLevel, double lowerLevel, double buyTP, double sellTP)
+{
+    string infoText = "--- Range Breakout Levels ---";
+    string upperText = "Upper Breakout: " + DoubleToString(upperLevel, Digits);
+    string lowerText = "Lower Breakout: " + DoubleToString(lowerLevel, Digits);
+    string buyTpText = "Buy Take Profit: " + DoubleToString(buyTP, Digits);
+    string sellTpText = "Sell Take Profit: " + DoubleToString(sellTP, Digits);
+    
+    // Calculate 50 EMA for current bar
+    double ema = EMA50[0];
+    string emaText = "50 EMA: " + DoubleToString(ema, Digits);
+    string trendText = "Trend: " + (Close[0] > ema ? "Bullish (Buy)" : "Bearish (Sell)");
+    
+    // Create or update labels
+    createLabel("infoLabel", infoText, 10, 25, clrWhite, 10);
+    createLabel("upperLabel", upperText, 10, 45, clrBlue, 9);
+    createLabel("lowerLabel", lowerText, 10, 65, clrRed, 9);
+    createLabel("buyTpLabel", buyTpText, 10, 85, clrGreen, 9);
+    createLabel("sellTpLabel", sellTpText, 10, 105, clrGreen, 9);
+    createLabel("emaLabel", emaText, 10, 125, clrPurple, 9);
+    createLabel("trendLabel", trendText, 10, 145, Close[0] > ema ? clrLime : clrMagenta, 9);
+}
+
+//+------------------------------------------------------------------+
+//| Helper function to create or update chart labels                 |
+//+------------------------------------------------------------------+
+void createLabel(string name, string text, int x, int y, color textColor, int fontSize)
+{
+    if (ObjectFind(name) == -1) // Create if doesn't exist
+    {
+        ObjectCreate(name, OBJ_LABEL, 0, 0, 0);
+        ObjectSet(name, OBJPROP_CORNER, 0); // Top-left corner
+        ObjectSet(name, OBJPROP_XDISTANCE, x);
+        ObjectSet(name, OBJPROP_YDISTANCE, y);
+    }
+    
+    ObjectSetText(name, text, fontSize, "Arial", textColor);
+}
